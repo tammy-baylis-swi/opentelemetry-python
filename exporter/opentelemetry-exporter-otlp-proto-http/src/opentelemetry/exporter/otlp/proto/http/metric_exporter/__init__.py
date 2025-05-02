@@ -12,7 +12,6 @@
 # limitations under the License.
 from __future__ import annotations
 
-from dataclasses import replace
 import gzip
 import logging
 import zlib
