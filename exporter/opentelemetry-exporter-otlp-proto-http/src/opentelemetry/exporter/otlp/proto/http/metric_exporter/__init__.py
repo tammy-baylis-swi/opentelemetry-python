@@ -269,7 +269,7 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                 export_result = MetricExportResult.SUCCESS
                 for split_metrics_data in self._split_metrics_data(serialized_data):
                     split_resp = self._export(
-                        data=split_metrics_data.SerializeToString()
+                        split_metrics_data.SerializeToString()
                     )
 
                     if split_resp.ok:
