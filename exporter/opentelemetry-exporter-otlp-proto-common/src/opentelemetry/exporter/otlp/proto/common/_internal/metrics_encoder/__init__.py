@@ -13,6 +13,7 @@
 # limitations under the License.
 from __future__ import annotations
 
+from dataclasses import replace
 import logging
 from os import environ
 from typing import Dict, List
@@ -171,6 +172,88 @@ class OTLPMetricExporterMixin:
 
         return instrument_class_aggregation
 
+def split_metrics_data(
+    metrics_data: MetricsData,
+    max_export_batch_size: int,
+) -> Iterable[MetricsData]:
+    batch_size: int = 0
+    split_resource_metrics: List[ResourceMetrics] = []
+
+    for resource_metrics in metrics_data.resource_metrics:
+        split_scope_metrics: List[ScopeMetrics] = []
+        split_resource_metrics.append(
+            replace(
+                resource_metrics,
+                scope_metrics=split_scope_metrics,
+            )
+        )
+        for scope_metrics in resource_metrics.scope_metrics:
+            split_metrics: List[Metric] = []
+            split_scope_metrics.append(
+                replace(
+                    scope_metrics,
+                    metrics=split_metrics,
+                )
+            )
+            for metric in scope_metrics.metrics:
+                split_data_points: List[DataPointT] = []
+                split_metrics.append(
+                    replace(
+                        metric,
+                        data=replace(
+                            metric.data,
+                            data_points=split_data_points,
+                        ),
+                    )
+                )
+
+                for data_point in metric.data.data_points:
+                    split_data_points.append(data_point)
+                    batch_size += 1
+
+                    if batch_size >= max_export_batch_size:
+                        yield MetricsData(
+                            resource_metrics=split_resource_metrics
+                        )
+                        # Reset all the variables
+                        batch_size = 0
+                        split_data_points = []
+                        split_metrics = [
+                            replace(
+                                metric,
+                                data=replace(
+                                    metric.data,
+                                    data_points=split_data_points,
+                                ),
+                            )
+                        ]
+                        split_scope_metrics = [
+                            replace(
+                                scope_metrics,
+                                metrics=split_metrics,
+                            )
+                        ]
+                        split_resource_metrics = [
+                            replace(
+                                resource_metrics,
+                                scope_metrics=split_scope_metrics,
+                            )
+                        ]
+
+                if not split_data_points:
+                    # If data_points is empty remove the whole metric
+                    split_metrics.pop()
+
+            if not split_metrics:
+                # If metrics is empty remove the whole scope_metrics
+                split_scope_metrics.pop()
+
+        if not split_scope_metrics:
+            # If scope_metrics is empty remove the whole resource_metrics
+            split_resource_metrics.pop()
+
+    if batch_size > 0:
+        yield MetricsData(resource_metrics=split_resource_metrics)
 
 class EncodingException(Exception):
     """

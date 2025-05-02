@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from logging import getLogger
 from os import environ
 from typing import Iterable, List, Tuple, Union
@@ -22,6 +21,7 @@ from typing import Sequence as TypingSequence
 from grpc import ChannelCredentials, Compression
 from opentelemetry.exporter.otlp.proto.common._internal.metrics_encoder import (
     OTLPMetricExporterMixin,
+    split_metrics_data,
 )
 from opentelemetry.exporter.otlp.proto.common.metrics_encoder import (
     encode_metrics,
@@ -179,84 +179,10 @@ class OTLPMetricExporter(
         self,
         metrics_data: MetricsData,
     ) -> Iterable[MetricsData]:
-        batch_size: int = 0
-        split_resource_metrics: List[ResourceMetrics] = []
-
-        for resource_metrics in metrics_data.resource_metrics:
-            split_scope_metrics: List[ScopeMetrics] = []
-            split_resource_metrics.append(
-                replace(
-                    resource_metrics,
-                    scope_metrics=split_scope_metrics,
-                )
-            )
-            for scope_metrics in resource_metrics.scope_metrics:
-                split_metrics: List[Metric] = []
-                split_scope_metrics.append(
-                    replace(
-                        scope_metrics,
-                        metrics=split_metrics,
-                    )
-                )
-                for metric in scope_metrics.metrics:
-                    split_data_points: List[DataPointT] = []
-                    split_metrics.append(
-                        replace(
-                            metric,
-                            data=replace(
-                                metric.data,
-                                data_points=split_data_points,
-                            ),
-                        )
-                    )
-
-                    for data_point in metric.data.data_points:
-                        split_data_points.append(data_point)
-                        batch_size += 1
-
-                        if batch_size >= self._max_export_batch_size:
-                            yield MetricsData(
-                                resource_metrics=split_resource_metrics
-                            )
-                            # Reset all the variables
-                            batch_size = 0
-                            split_data_points = []
-                            split_metrics = [
-                                replace(
-                                    metric,
-                                    data=replace(
-                                        metric.data,
-                                        data_points=split_data_points,
-                                    ),
-                                )
-                            ]
-                            split_scope_metrics = [
-                                replace(
-                                    scope_metrics,
-                                    metrics=split_metrics,
-                                )
-                            ]
-                            split_resource_metrics = [
-                                replace(
-                                    resource_metrics,
-                                    scope_metrics=split_scope_metrics,
-                                )
-                            ]
-
-                    if not split_data_points:
-                        # If data_points is empty remove the whole metric
-                        split_metrics.pop()
-
-                if not split_metrics:
-                    # If metrics is empty remove the whole scope_metrics
-                    split_scope_metrics.pop()
-
-            if not split_scope_metrics:
-                # If scope_metrics is empty remove the whole resource_metrics
-                split_resource_metrics.pop()
-
-        if batch_size > 0:
-            yield MetricsData(resource_metrics=split_resource_metrics)
+        return split_metrics_data(
+            metrics_data,
+            self._max_export_batch_size,
+        )
 
     def shutdown(self, timeout_millis: float = 30_000, **kwargs) -> None:
         OTLPExporterMixin.shutdown(self, timeout_millis=timeout_millis)
