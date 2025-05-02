@@ -14,6 +14,7 @@
 
 from logging import WARNING
 from os import environ
+from typing import List
 from unittest import TestCase
 from unittest.mock import MagicMock, Mock, call, patch
 
@@ -33,6 +34,7 @@ from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
     OTLPMetricExporter,
 )
 from opentelemetry.exporter.otlp.proto.http.version import __version__
+from opentelemetry.proto.common.v1.common_pb2 import InstrumentationScope
 from opentelemetry.sdk.environment_variables import (
     OTEL_EXPORTER_OTLP_CERTIFICATE,
     OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE,
@@ -61,8 +63,11 @@ from opentelemetry.sdk.metrics import (
 )
 from opentelemetry.sdk.metrics.export import (
     AggregationTemporality,
+    Gauge,
+    Metric,
     MetricExportResult,
     MetricsData,
+    NumberDataPoint,
     ResourceMetrics,
     ScopeMetrics,
 )
@@ -352,6 +357,276 @@ class TestOTLPMetricExporter(TestCase):
             [call(1), call(2), call(4), call(8), call(16), call(32)]
         )
 
+    def test_split_metrics_data_many_data_points(self):
+        # GIVEN
+        metrics_data = MetricsData(
+            resource_metrics=[
+                _resource_metrics(
+                    index=1,
+                    scope_metrics=[
+                        _scope_metrics(
+                            index=1,
+                            metrics=[
+                                _gauge(
+                                    index=1,
+                                    data_points=[
+                                        _number_data_point(11),
+                                        _number_data_point(12),
+                                        _number_data_point(13),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            ]
+        )
+        # WHEN
+        split_metrics_data: List[MetricsData] = list(
+            # pylint: disable=protected-access
+            OTLPMetricExporter(max_export_batch_size=2)._split_metrics_data(
+                metrics_data=metrics_data,
+            )
+        )
+        # THEN
+        self.assertEqual(
+            [
+                MetricsData(
+                    resource_metrics=[
+                        _resource_metrics(
+                            index=1,
+                            scope_metrics=[
+                                _scope_metrics(
+                                    index=1,
+                                    metrics=[
+                                        _gauge(
+                                            index=1,
+                                            data_points=[
+                                                _number_data_point(11),
+                                                _number_data_point(12),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ]
+                ),
+                MetricsData(
+                    resource_metrics=[
+                        _resource_metrics(
+                            index=1,
+                            scope_metrics=[
+                                _scope_metrics(
+                                    index=1,
+                                    metrics=[
+                                        _gauge(
+                                            index=1,
+                                            data_points=[
+                                                _number_data_point(13),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ]
+                ),
+            ],
+            split_metrics_data,
+        )
+
+    def test_split_metrics_data_nb_data_points_equal_batch_size(self):
+        # GIVEN
+        metrics_data = MetricsData(
+            resource_metrics=[
+                _resource_metrics(
+                    index=1,
+                    scope_metrics=[
+                        _scope_metrics(
+                            index=1,
+                            metrics=[
+                                _gauge(
+                                    index=1,
+                                    data_points=[
+                                        _number_data_point(11),
+                                        _number_data_point(12),
+                                        _number_data_point(13),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            ]
+        )
+        # WHEN
+        split_metrics_data: List[MetricsData] = list(
+            # pylint: disable=protected-access
+            OTLPMetricExporter(max_export_batch_size=3)._split_metrics_data(
+                metrics_data=metrics_data,
+            )
+        )
+        # THEN
+        self.assertEqual(
+            [
+                MetricsData(
+                    resource_metrics=[
+                        _resource_metrics(
+                            index=1,
+                            scope_metrics=[
+                                _scope_metrics(
+                                    index=1,
+                                    metrics=[
+                                        _gauge(
+                                            index=1,
+                                            data_points=[
+                                                _number_data_point(11),
+                                                _number_data_point(12),
+                                                _number_data_point(13),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ]
+                ),
+            ],
+            split_metrics_data,
+        )
+
+    def test_split_metrics_data_many_resources_scopes_metrics(self):
+        # GIVEN
+        metrics_data = MetricsData(
+            resource_metrics=[
+                _resource_metrics(
+                    index=1,
+                    scope_metrics=[
+                        _scope_metrics(
+                            index=1,
+                            metrics=[
+                                _gauge(
+                                    index=1,
+                                    data_points=[
+                                        _number_data_point(11),
+                                    ],
+                                ),
+                                _gauge(
+                                    index=2,
+                                    data_points=[
+                                        _number_data_point(12),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        _scope_metrics(
+                            index=2,
+                            metrics=[
+                                _gauge(
+                                    index=3,
+                                    data_points=[
+                                        _number_data_point(13),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+                _resource_metrics(
+                    index=2,
+                    scope_metrics=[
+                        _scope_metrics(
+                            index=3,
+                            metrics=[
+                                _gauge(
+                                    index=4,
+                                    data_points=[
+                                        _number_data_point(14),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            ]
+        )
+        # WHEN
+        split_metrics_data: List[MetricsData] = list(
+            # pylint: disable=protected-access
+            OTLPMetricExporter(max_export_batch_size=2)._split_metrics_data(
+                metrics_data=metrics_data,
+            )
+        )
+        # THEN
+        self.assertEqual(
+            [
+                MetricsData(
+                    resource_metrics=[
+                        _resource_metrics(
+                            index=1,
+                            scope_metrics=[
+                                _scope_metrics(
+                                    index=1,
+                                    metrics=[
+                                        _gauge(
+                                            index=1,
+                                            data_points=[
+                                                _number_data_point(11),
+                                            ],
+                                        ),
+                                        _gauge(
+                                            index=2,
+                                            data_points=[
+                                                _number_data_point(12),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ]
+                ),
+                MetricsData(
+                    resource_metrics=[
+                        _resource_metrics(
+                            index=1,
+                            scope_metrics=[
+                                _scope_metrics(
+                                    index=2,
+                                    metrics=[
+                                        _gauge(
+                                            index=3,
+                                            data_points=[
+                                                _number_data_point(13),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                        _resource_metrics(
+                            index=2,
+                            scope_metrics=[
+                                _scope_metrics(
+                                    index=3,
+                                    metrics=[
+                                        _gauge(
+                                            index=4,
+                                            data_points=[
+                                                _number_data_point(14),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ]
+                ),
+            ],
+            split_metrics_data,
+        )
+
     def test_aggregation_temporality(self):
         otlp_metric_exporter = OTLPMetricExporter()
 
@@ -523,3 +798,41 @@ class TestOTLPMetricExporter(TestCase):
         self.assertEqual(
             exporter._preferred_aggregation[Histogram], histogram_aggregation
         )
+
+def _resource_metrics(
+    index: int, scope_metrics: List[ScopeMetrics]
+) -> ResourceMetrics:
+    return ResourceMetrics(
+        resource=Resource(
+            attributes={"a": index},
+            schema_url=f"resource_url_{index}",
+        ),
+        schema_url=f"resource_url_{index}",
+        scope_metrics=scope_metrics,
+    )
+
+
+def _scope_metrics(index: int, metrics: List[Metric]) -> ScopeMetrics:
+    return ScopeMetrics(
+        scope=InstrumentationScope(name=f"scope_{index}"),
+        schema_url=f"scope_url_{index}",
+        metrics=metrics,
+    )
+
+
+def _gauge(index: int, data_points: List[NumberDataPoint]) -> Metric:
+    return Metric(
+        name=f"gauge_{index}",
+        description="description",
+        unit="unit",
+        data=Gauge(data_points=data_points),
+    )
+
+
+def _number_data_point(value: int) -> NumberDataPoint:
+    return NumberDataPoint(
+        attributes={"a": 1, "b": True},
+        start_time_unix_nano=1641946015139533244,
+        time_unix_nano=1641946016139533244,
+        value=value,
+    )
