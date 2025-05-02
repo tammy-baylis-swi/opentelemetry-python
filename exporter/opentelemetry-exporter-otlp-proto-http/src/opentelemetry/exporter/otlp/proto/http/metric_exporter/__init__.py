@@ -297,10 +297,303 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
 
     def _split_metrics_data(
         self,
-        metrics_data: MetricsData,
-    ) -> Iterable[MetricsData]:
-        # TODO
-        return []
+        metrics_data: pb2.MetricsData,
+    ) -> Iterable[pb2.MetricsData]:
+        """Splits metrics data into several metrics data
+
+        Args:
+            metrics_data: metrics object based on HTTP protocol buffer definition
+        """
+        batch_size: int = 0
+        split_resource_metrics: List[pb2.ResourceMetrics] = []
+
+        for resource_metrics in metrics_data.resource_metrics:
+            split_scope_metrics: List[pb2.ScopeMetrics] = []
+            split_resource_metrics.append(
+                pb2.ResourceMetrics(
+                    resource=resource_metrics.resource,
+                    scope_metrics=split_scope_metrics,
+                    schema_url=resource_metrics.schema_url,
+                )
+            )
+            for scope_metrics in resource_metrics.scope_metrics:
+                split_metrics: List[pb2.Metric] = []
+                split_scope_metrics.append(
+                    pb2.ScopeMetrics(
+                        scope=scope_metrics.scope,
+                        metrics=split_metrics,
+                        schema_url=scope_metrics.schema_url,
+                    )
+                )
+                for metric in scope_metrics.metrics:
+                    # protobuf requires specific metrics types (e.g. Sum, Histogram)
+                    # without definition of DataPointT like gRPC
+
+                    if metric.HasField("sum"):
+                        split_data_points = []
+                        split_metrics.append(
+                            pb2.Metric(
+                                name=metric.name,
+                                description=metric.description,
+                                unit=metric.unit,
+                                sum=pb2.Sum(
+                                    data_points=split_data_points,
+                                    aggregation_temporality=metric.sum.aggregation_temporality,
+                                    is_monotonic=metric.sum.is_monotonic
+                                )
+                            )
+                        )
+                        for data_point in metric.sum.data_points:
+                            split_data_points.append(data_point)
+                            batch_size += 1
+
+                            if batch_size >= self._max_export_batch_size:
+                                yield pb2.MetricsData(
+                                    resource_metrics=split_resource_metrics
+                                )
+                                # Reset all the variables
+                                batch_size = 0
+                                split_data_points = []
+                                split_metrics = [
+                                    pb2.Metric(
+                                        name=metric.name,
+                                        description=metric.description,
+                                        unit=metric.unit,
+                                        sum=pb2.Sum(
+                                            data_points=split_data_points,
+                                            aggregation_temporality=metric.sum.aggregation_temporality,
+                                            is_monotonic=metric.sum.is_monotonic
+                                        )
+                                    )
+                                ]
+                                split_scope_metrics = [
+                                    pb2.ScopeMetrics(
+                                        scope=scope_metrics.scope,
+                                        metrics=split_metrics,
+                                        schema_url=scope_metrics.schema_url,
+                                    )
+                                ]
+                                split_resource_metrics = [
+                                    pb2.ResourceMetrics(
+                                        resource=resource_metrics.resource,
+                                        scope_metrics=split_scope_metrics,
+                                        schema_url=resource_metrics.schema_url,
+                                    )
+                                ]
+
+                    elif metric.HasField("histogram"):
+                        split_data_points = []
+                        split_metrics.append(
+                            pb2.Metric(
+                                name=metric.name,
+                                description=metric.description,
+                                unit=metric.unit,
+                                histogram=pb2.Histogram(
+                                    data_points=split_data_points,
+                                    aggregation_temporality=metric.histogram.aggregation_temporality,
+                                ),
+                            )
+                        )
+                        for data_point in metric.histogram.data_points:
+                            split_data_points.append(data_point)
+                            batch_size += 1
+
+                            if batch_size >= self._max_export_batch_size:
+                                yield pb2.MetricsData(
+                                    resource_metrics=split_resource_metrics
+                                )
+                                # Reset all the variables
+                                batch_size = 0
+                                split_data_points = []
+                                split_metrics = [
+                                    pb2.Metric(
+                                        name=metric.name,
+                                        description=metric.description,
+                                        unit=metric.unit,
+                                        histogram=pb2.Histogram(
+                                            data_points=split_data_points,
+                                            aggregation_temporality=metric.histogram.aggregation_temporality,
+                                        )
+                                    )
+                                ]
+                                split_scope_metrics = [
+                                    pb2.ScopeMetrics(
+                                        scope=scope_metrics.scope,
+                                        metrics=split_metrics,
+                                        schema_url=scope_metrics.schema_url,
+                                    )
+                                ]
+                                split_resource_metrics = [
+                                    pb2.ResourceMetrics(
+                                        resource=resource_metrics.resource,
+                                        scope_metrics=split_scope_metrics,
+                                        schema_url=resource_metrics.schema_url,
+                                    )
+                                ]
+
+                    elif metric.HasField("exponential_histogram"):
+                        split_data_points = []
+                        split_metrics.append(
+                            pb2.Metric(
+                                name=metric.name,
+                                description=metric.description,
+                                unit=metric.unit,
+                                exponential_histogram=pb2.ExponentialHistogram(
+                                    data_points=split_data_points,
+                                    aggregation_temporality=metric.exponential_histogram.aggregation_temporality,
+                                ),
+                            )
+                        )
+                        for data_point in metric.exponential_histogram.data_points:
+                            split_data_points.append(data_point)
+                            batch_size += 1
+
+                            if batch_size >= self._max_export_batch_size:
+                                yield pb2.MetricsData(
+                                    resource_metrics=split_resource_metrics
+                                )
+                                # Reset all the variables
+                                batch_size = 0
+                                split_data_points = []
+                                split_metrics = [
+                                    pb2.Metric(
+                                        name=metric.name,
+                                        description=metric.description,
+                                        unit=metric.unit,
+                                        exponential_histogram=pb2.ExponentialHistogram(
+                                            data_points=split_data_points,
+                                            aggregation_temporality=metric.exponential_histogram.aggregation_temporality,
+                                        )
+                                    )
+                                ]
+                                split_scope_metrics = [
+                                    pb2.ScopeMetrics(
+                                        scope=scope_metrics.scope,
+                                        metrics=split_metrics,
+                                        schema_url=scope_metrics.schema_url,
+                                    )
+                                ]
+                                split_resource_metrics = [
+                                    pb2.ResourceMetrics(
+                                        resource=resource_metrics.resource,
+                                        scope_metrics=split_scope_metrics,
+                                        schema_url=resource_metrics.schema_url,
+                                    )
+                                ]
+
+                    elif metric.HasField("gauge"):
+                        split_data_points = []
+                        split_metrics.append(
+                            pb2.Metric(
+                                name=metric.name,
+                                description=metric.description,
+                                unit=metric.unit,
+                                gauge=pb2.Gauge(
+                                    data_points=split_data_points,
+                                )
+                            )
+                        )
+                        for data_point in metric.gauge.data_points:
+                            split_data_points.append(data_point)
+                            batch_size += 1
+
+                            if batch_size >= self._max_export_batch_size:
+                                yield pb2.MetricsData(
+                                    resource_metrics=split_resource_metrics
+                                )
+                                # Reset all the variables
+                                batch_size = 0
+                                split_data_points = []
+                                split_metrics = [
+                                    pb2.Metric(
+                                        name=metric.name,
+                                        description=metric.description,
+                                        unit=metric.unit,
+                                        gauge=pb2.Gauge(
+                                            data_points=split_data_points,
+                                        ),
+                                    )
+                                ]
+                                split_scope_metrics = [
+                                    pb2.ScopeMetrics(
+                                        scope=scope_metrics.scope,
+                                        metrics=split_metrics,
+                                        schema_url=scope_metrics.schema_url,
+                                    )
+                                ]
+                                split_resource_metrics = [
+                                    pb2.ResourceMetrics(
+                                        resource=resource_metrics.resource,
+                                        scope_metrics=split_scope_metrics,
+                                        schema_url=resource_metrics.schema_url,
+                                    )
+                                ]
+
+                    elif metric.HasField("summary"):
+                        split_data_points = []
+                        split_metrics.append(
+                            pb2.Metric(
+                                name=metric.name,
+                                description=metric.description,
+                                unit=metric.unit,
+                                summary=pb2.Summary(
+                                    data_points=split_data_points,
+                                )
+                            )
+                        )
+                        for data_point in metric.summary.data_points:
+                            split_data_points.append(data_point)
+                            batch_size += 1
+
+                            if batch_size >= self._max_export_batch_size:
+                                yield pb2.MetricsData(
+                                    resource_metrics=split_resource_metrics
+                                )
+                                # Reset all the variables
+                                batch_size = 0
+                                split_data_points = []
+                                split_metrics = [
+                                    pb2.Metric(
+                                        name=metric.name,
+                                        description=metric.description,
+                                        unit=metric.unit,
+                                        summary=pb2.Summary(
+                                            data_points=split_data_points,
+                                        ),
+                                    )
+                                ]
+                                split_scope_metrics = [
+                                    pb2.ScopeMetrics(
+                                        scope=scope_metrics.scope,
+                                        metrics=split_metrics,
+                                        schema_url=scope_metrics.schema_url,
+                                    )
+                                ]
+                                split_resource_metrics = [
+                                    pb2.ResourceMetrics(
+                                        resource=resource_metrics.resource,
+                                        scope_metrics=split_scope_metrics,
+                                        schema_url=resource_metrics.schema_url,
+                                    )
+                                ]
+
+                    else:
+                        _logger.warning("Tried to split and export an unsupported metric type.")
+
+                    if not split_data_points:
+                        # If data_points is empty remove the whole metric
+                        split_metrics.pop()
+
+                if not split_metrics:
+                    # If metrics is empty remove the whole scope_metrics
+                    split_scope_metrics.pop()
+
+            if not split_scope_metrics:
+                # If scope_metrics is empty remove the whole resource_metrics
+                split_resource_metrics.pop()
+
+        if batch_size > 0:
+            yield pb2.MetricsData(resource_metrics=split_resource_metrics)
 
     def shutdown(self, timeout_millis: float = 30_000, **kwargs) -> None:
         pass
