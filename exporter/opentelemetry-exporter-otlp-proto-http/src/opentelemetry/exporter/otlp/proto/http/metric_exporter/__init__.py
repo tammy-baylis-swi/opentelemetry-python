@@ -12,6 +12,7 @@
 # limitations under the License.
 from __future__ import annotations
 
+from dataclasses import replace
 import gzip
 import logging
 import zlib
@@ -116,7 +117,29 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
         preferred_temporality: dict[type, AggregationTemporality]
         | None = None,
         preferred_aggregation: dict[type, Aggregation] | None = None,
+        max_export_batch_size: int | None = None,
     ):
+        """OTLP HTTP metrics exporter
+
+        Args:
+            endpoint: Target URL to which the exporter is going to send metrics
+            certificate_file: Path to the certificate file to use for any TLS
+            client_key_file: Path to the client key file to use for any TLS
+            client_certificate_file: Path to the client certificate file to use for any TLS
+            headers: Headers to be sent with HTTP requests at export
+            timeout: Timeout in seconds for export
+            compression: Compression to use; one of none, gzip, deflate
+            session: Requests session to use at export
+            preferred_temporality: Map of preferred temporality for each metric type.
+                See `opentelemetry.sdk.metrics.export.MetricReader` for more details on what
+                preferred temporality is.
+            preferred_aggregation: Map of preferred aggregation for each metric type.
+                See `opentelemetry.sdk.metrics.export.MetricReader` for more details on what
+                preferred aggregation is.
+            max_export_batch_size: Maximum number of data points to export in a single request.
+                If not set there is no limit to the number of data points in a request.
+                If it is set and the number of data points exceeds the max, the request will be split.
+        """
         self._endpoint = endpoint or environ.get(
             OTEL_EXPORTER_OTLP_METRICS_ENDPOINT,
             _append_metrics_path(
@@ -165,6 +188,7 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
         self._common_configuration(
             preferred_temporality, preferred_aggregation
         )
+        self._max_export_batch_size: int | None = max_export_batch_size
 
     def _export(self, serialized_data: bytes):
         data = serialized_data
@@ -219,26 +243,64 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
             if delay == self._MAX_RETRY_TIMEOUT:
                 return MetricExportResult.FAILURE
 
-            resp = self._export(serialized_data.SerializeToString())
-            # pylint: disable=no-else-return
-            if resp.ok:
-                return MetricExportResult.SUCCESS
-            elif self._retryable(resp):
-                _logger.warning(
-                    "Transient error %s encountered while exporting metric batch, retrying in %ss.",
-                    resp.reason,
-                    delay,
-                )
-                sleep(delay)
-                continue
+            if self._max_export_batch_size is None:
+                resp = self._export(serialized_data.SerializeToString())
+                # pylint: disable=no-else-return
+                if resp.ok:
+                    return MetricExportResult.SUCCESS
+                elif self._retryable(resp):
+                    _logger.warning(
+                        "Transient error %s encountered while exporting metric batch, retrying in %ss.",
+                        resp.reason,
+                        delay,
+                    )
+                    sleep(delay)
+                    continue
+                else:
+                    _logger.error(
+                        "Failed to export batch code: %s, reason: %s",
+                        resp.status_code,
+                        resp.text,
+                    )
+                    return MetricExportResult.FAILURE
+            
+            # Else, attempt export in batches for this retry
             else:
-                _logger.error(
-                    "Failed to export batch code: %s, reason: %s",
-                    resp.status_code,
-                    resp.text,
-                )
-                return MetricExportResult.FAILURE
+                export_result = MetricExportResult.SUCCESS
+                for split_metrics_data in self._split_metrics_data(serialized_data):
+                    split_resp = self._export(
+                        data=split_metrics_data.SerializeToString()
+                    )
+
+                    if split_resp.ok:
+                        export_result = MetricExportResult.SUCCESS
+                    elif self._retryable(split_resp):
+                        _logger.warning(
+                            "Transient error %s encountered while exporting metric batch, retrying in %ss.",
+                            split_resp.reason,
+                            delay,
+                        )
+                        sleep(delay)
+                        continue
+                    else:
+                        _logger.error(
+                            "Failed to export batch code: %s, reason: %s",
+                            split_resp.status_code,
+                            split_resp.text,
+                        )
+                        export_result = MetricExportResult.FAILURE
+                
+                # Return result after all batches are attempted
+                return export_result
+    
         return MetricExportResult.FAILURE
+
+    def _split_metrics_data(
+        self,
+        metrics_data: MetricsData,
+    ) -> Iterable[MetricsData]:
+        # TODO
+        return []
 
     def shutdown(self, timeout_millis: float = 30_000, **kwargs) -> None:
         pass
