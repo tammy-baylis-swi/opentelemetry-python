@@ -244,25 +244,56 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
             if delay == self._MAX_RETRY_TIMEOUT:
                 return MetricExportResult.FAILURE
 
-            resp = self._export(serialized_data.SerializeToString())
-            # pylint: disable=no-else-return
-            if resp.ok:
-                return MetricExportResult.SUCCESS
-            elif self._retryable(resp):
-                _logger.warning(
-                    "Transient error %s encountered while exporting metric batch, retrying in %ss.",
-                    resp.reason,
-                    delay,
-                )
-                sleep(delay)
-                continue
+            if self._max_export_batch_size is None:
+                resp = self._export(serialized_data.SerializeToString())
+                # pylint: disable=no-else-return
+                if resp.ok:
+                    return MetricExportResult.SUCCESS
+                elif self._retryable(resp):
+                    _logger.warning(
+                        "Transient error %s encountered while exporting metric batch, retrying in %ss.",
+                        resp.reason,
+                        delay,
+                    )
+                    sleep(delay)
+                    continue
+                else:
+                    _logger.error(
+                        "Failed to export batch code: %s, reason: %s",
+                        resp.status_code,
+                        resp.text,
+                    )
+                    return MetricExportResult.FAILURE
+            
+            # Else, attempt export in batches for this retry
             else:
-                _logger.error(
-                    "Failed to export batch code: %s, reason: %s",
-                    resp.status_code,
-                    resp.text,
-                )
-                return MetricExportResult.FAILURE
+                export_result = MetricExportResult.SUCCESS
+                for split_metrics_data in self._split_metrics_data(serialized_data):
+                    split_resp = self._export(
+                        data=split_metrics_data.SerializeToString()
+                    )
+
+                    if split_resp.ok:
+                        export_result = MetricExportResult.SUCCESS
+                    elif self._retryable(split_resp):
+                        _logger.warning(
+                            "Transient error %s encountered while exporting metric batch, retrying in %ss.",
+                            split_resp.reason,
+                            delay,
+                        )
+                        sleep(delay)
+                        continue
+                    else:
+                        _logger.error(
+                            "Failed to export batch code: %s, reason: %s",
+                            split_resp.status_code,
+                            split_resp.text,
+                        )
+                        export_result = MetricExportResult.FAILURE
+                
+                # Return result after all batches are attempted
+                return export_result
+
         return MetricExportResult.FAILURE
 
     def _split_metrics_data(
