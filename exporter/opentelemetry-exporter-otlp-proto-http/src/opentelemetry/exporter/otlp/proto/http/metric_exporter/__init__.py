@@ -398,7 +398,7 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                         split_metrics.append(new_metric)
                         for data_point in metric.histogram.data_points:
                             split_data_points.append(data_point)
-                            new_metric.sum.data_points.append(data_point)
+                            new_metric.histogram.data_points.append(data_point)
                             batch_size += 1
 
                             if batch_size >= self._max_export_batch_size:
@@ -452,7 +452,7 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
 
                         for data_point in metric.exponential_histogram.data_points:
                             split_data_points.append(data_point)
-                            new_metric.sum.data_points.append(data_point)
+                            new_metric.exponential_histogram.data_points.append(data_point)
                             batch_size += 1
 
                             if batch_size >= self._max_export_batch_size:
@@ -505,7 +505,7 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
 
                         for data_point in metric.gauge.data_points:
                             split_data_points.append(data_point)
-                            new_metric.sum.data_points.append(data_point)
+                            new_metric.gauge.data_points.append(data_point)
                             batch_size += 1
 
                             if batch_size >= self._max_export_batch_size:
@@ -557,7 +557,7 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
 
                         for data_point in metric.summary.data_points:
                             split_data_points.append(data_point)
-                            new_metric.sum.data_points.append(data_point)
+                            new_metric.summary.data_points.append(data_point)
                             batch_size += 1
 
                             if batch_size >= self._max_export_batch_size:
