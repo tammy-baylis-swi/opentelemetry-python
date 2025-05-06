@@ -298,7 +298,8 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
         self,
         metrics_data: pb2.MetricsData,
     ) -> Iterable[pb2.MetricsData]:
-        """Splits metrics data into several metrics data. Copies protobuf originals.
+        """Splits metrics data into several MetricsData (copies protobuf originals), 
+        based on configured data point max export batch size.
 
         Args:
             metrics_data: metrics object based on HTTP protocol buffer definition
@@ -408,9 +409,14 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                         batch_size += 1
 
                         if batch_size >= self._max_export_batch_size:
+                            # Update scope metrics, resource metrics after all data_points (so far) added to metric
+                            # and yield this batch
+                            new_scope_metrics.metrics.append(new_metric)
+                            new_resource_metrics.scope_metrics.append(new_scope_metrics)
                             yield pb2.MetricsData(
                                 resource_metrics=split_resource_metrics
                             )
+
                             # Reset all the variables
                             batch_size = 0
                             split_data_points = []
