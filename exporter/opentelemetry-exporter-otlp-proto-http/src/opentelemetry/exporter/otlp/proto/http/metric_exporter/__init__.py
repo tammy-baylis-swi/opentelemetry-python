@@ -413,17 +413,19 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                             # and yield this batch
                             new_scope_metrics.metrics.append(new_metric)
                             new_resource_metrics.scope_metrics.append(new_scope_metrics)
+
                             yield pb2.MetricsData(
                                 resource_metrics=split_resource_metrics
                             )
 
-                            # Reset all the variables
+                            # Reset all the variables with current metrics_data position
+                            # minus yielded datapoints
                             batch_size = 0
                             split_data_points = []
 
-                            reset_metric = None 
+                            new_metric = None 
                             if metric.HasField("sum"):
-                                reset_metric = pb2.Metric(
+                                new_metric = pb2.Metric(
                                     name=metric.name,
                                     description=metric.description,
                                     unit=metric.unit,
@@ -434,7 +436,7 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                                     )
                                 )
                             elif metric.HasField("histogram"):
-                                reset_metric = pb2.Metric(
+                                new_metric = pb2.Metric(
                                     name=metric.name,
                                     description=metric.description,
                                     unit=metric.unit,
@@ -444,7 +446,7 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                                     ),
                                 )
                             elif metric.HasField("exponential_histogram"):
-                                reset_metric = pb2.Metric(
+                                new_metric = pb2.Metric(
                                     name=metric.name,
                                     description=metric.description,
                                     unit=metric.unit,
@@ -454,7 +456,7 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                                     ),
                                 )
                             elif metric.HasField("gauge"):
-                                reset_metric = pb2.Metric(
+                                new_metric = pb2.Metric(
                                     name=metric.name,
                                     description=metric.description,
                                     unit=metric.unit,
@@ -463,7 +465,7 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                                     )
                                 )
                             elif metric.HasField("summary"):
-                                reset_metric = pb2.Metric(
+                                new_metric = pb2.Metric(
                                     name=metric.name,
                                     description=metric.description,
                                     unit=metric.unit,
@@ -474,37 +476,38 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                             else:
                                 _logger.warning("Tried to split and export an unsupported metric type.")
 
-                            if reset_metric is not None:
-                                split_metrics = [reset_metric]
+                            if new_metric is not None:
+                                split_metrics = [new_metric]
+                            else:
+                                split_metrics = []
 
-                            split_scope_metrics = [
-                                pb2.ScopeMetrics(
-                                    scope=scope_metrics.scope,
-                                    metrics=split_metrics,
-                                    schema_url=scope_metrics.schema_url,
-                                )
-                            ]
-                            split_resource_metrics = [
-                                pb2.ResourceMetrics(
-                                    resource=resource_metrics.resource,
-                                    scope_metrics=split_scope_metrics,
-                                    schema_url=resource_metrics.schema_url,
-                                )
-                            ]
+                            new_scope_metrics = pb2.ScopeMetrics(
+                                scope=scope_metrics.scope,
+                                metrics=split_metrics,
+                                schema_url=scope_metrics.schema_url,
+                            )
+                            split_scope_metrics = [new_scope_metrics]
 
-                    # Update scope metrics after all data_points added to metric
-                    new_scope_metrics.metrics.append(new_metric)
+                            new_resource_metrics = pb2.ResourceMetrics(
+                                resource=resource_metrics.resource,
+                                scope_metrics=split_scope_metrics,
+                                schema_url=resource_metrics.schema_url,
+                            )
+                            split_resource_metrics = [new_resource_metrics]
 
                     if not split_data_points:
                         # If data_points is empty remove the whole metric
                         split_metrics.pop()
-
-                # Update resource_metrics after all scope_metrics updated with metrics, data_points
-                new_resource_metrics.scope_metrics.append(new_scope_metrics)
+                    else:
+                        # Update scope metrics after all data_points added to metric
+                        new_scope_metrics.metrics.append(new_metric)
 
                 if not split_metrics:
                     # If metrics is empty remove the whole scope_metrics
                     split_scope_metrics.pop()
+                else:
+                    # Update resource_metrics after all scope_metrics updated with metrics, data_points
+                    new_resource_metrics.scope_metrics.append(new_scope_metrics)
 
             if not split_scope_metrics:
                 # If scope_metrics is empty remove the whole resource_metrics
