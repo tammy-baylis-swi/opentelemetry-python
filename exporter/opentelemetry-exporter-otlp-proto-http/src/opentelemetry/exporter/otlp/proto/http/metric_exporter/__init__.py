@@ -305,7 +305,7 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
             metrics_data: metrics object based on HTTP protocol buffer definition
         """
         batch_size: int = 0
-        # TODO: Account for multiple ResourceMetrics in original MetricsData
+        split_resource_metrics: List[pb2.ResourceMetrics] = []
 
         for resource_metrics in metrics_data.resource_metrics:
             new_resource_metrics = pb2.ResourceMetrics(
@@ -512,11 +512,11 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                 if new_scope_metrics.metrics:
                     new_resource_metrics.scope_metrics.append(new_scope_metrics)
 
-            # TODO: Account for multiple ResourceMetrics in original MetricsData
+            if new_resource_metrics.scope_metrics:
+                split_resource_metrics.append(new_resource_metrics)
 
         if batch_size > 0:
-            # TODO: Account for multiple ResourceMetrics in original MetricsData
-            yield pb2.MetricsData(resource_metrics=[new_resource_metrics])
+            yield pb2.MetricsData(resource_metrics=split_resource_metrics)
 
     def shutdown(self, timeout_millis: float = 30_000, **kwargs) -> None:
         pass
