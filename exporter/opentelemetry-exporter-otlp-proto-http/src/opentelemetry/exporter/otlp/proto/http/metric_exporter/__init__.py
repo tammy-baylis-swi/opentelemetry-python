@@ -305,35 +305,32 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
             metrics_data: metrics object based on HTTP protocol buffer definition
         """
         batch_size: int = 0
-        split_resource_metrics: List[pb2.ResourceMetrics] = []
+        # TODO: Account for multiple ResourceMetrics in original MetricsData
 
         for resource_metrics in metrics_data.resource_metrics:
-            split_scope_metrics: List[pb2.ScopeMetrics] = []
             new_resource_metrics = pb2.ResourceMetrics(
                     resource=resource_metrics.resource,
                     scope_metrics=[],
                     schema_url=resource_metrics.schema_url,
                 )
-            split_resource_metrics.append(new_resource_metrics)
 
             for scope_metrics in resource_metrics.scope_metrics:
-                split_metrics: List[pb2.Metric] = []
                 new_scope_metrics = pb2.ScopeMetrics(
                         scope=scope_metrics.scope,
                         metrics=[],
                         schema_url=scope_metrics.schema_url,
                     )
-                split_scope_metrics.append(new_scope_metrics)
+                added_to_resource = False
 
                 for metric in scope_metrics.metrics:
                     # protobuf specifies metrics types (e.g. Sum, Histogram)
                     # without definition of DataPointT like gRPC
-                    metric_data_points = []
+                    current_data_points = []
                     new_metric = None
-                    split_data_points = []
+                    added_to_scope = False
 
                     if metric.HasField("sum"):
-                        metric_data_points = metric.sum.data_points
+                        current_data_points = metric.sum.data_points
                         new_metric = pb2.Metric(
                             name=metric.name,
                             description=metric.description,
@@ -345,7 +342,7 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                             )
                         )
                     elif metric.HasField("histogram"):
-                        metric_data_points = metric.histogram.data_points
+                        current_data_points = metric.histogram.data_points
                         new_metric = pb2.Metric(
                             name=metric.name,
                             description=metric.description,
@@ -356,7 +353,7 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                             ),
                         )
                     elif metric.HasField("exponential_histogram"):
-                        metric_data_points = metric.exponential_histogram.data_points
+                        current_data_points = metric.exponential_histogram.data_points
                         new_metric = pb2.Metric(
                             name=metric.name,
                             description=metric.description,
@@ -367,7 +364,7 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                             ),
                         )
                     elif metric.HasField("gauge"):
-                        metric_data_points = metric.gauge.data_points
+                        current_data_points = metric.gauge.data_points
                         new_metric = pb2.Metric(
                             name=metric.name,
                             description=metric.description,
@@ -377,7 +374,7 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                             )
                         )
                     elif metric.HasField("summary"):
-                        metric_data_points = metric.summary.data_points
+                        current_data_points = metric.summary.data_points
                         new_metric = pb2.Metric(
                             name=metric.name,
                             description=metric.description,
@@ -389,12 +386,7 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                     else:
                         _logger.warning("Tried to split and export an unsupported metric type.")
 
-                    if new_metric is not None:
-                        split_metrics.append(new_metric)
-
-                    for data_point in metric_data_points:
-                        split_data_points.append(data_point)
-
+                    for data_point in current_data_points:
                         if metric.HasField("sum"):
                             new_metric.sum.data_points.append(data_point)
                         elif metric.HasField("histogram"):
@@ -412,16 +404,18 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                             # Update scope metrics, resource metrics after all data_points (so far) added to metric
                             # and yield this batch
                             new_scope_metrics.metrics.append(new_metric)
+                            added_to_scope = True
                             new_resource_metrics.scope_metrics.append(new_scope_metrics)
+                            added_to_resource = True
 
                             yield pb2.MetricsData(
-                                resource_metrics=split_resource_metrics
+                                resource_metrics=[new_resource_metrics]
                             )
 
                             # Reset all the variables with current metrics_data position
-                            # minus yielded datapoints
+                            # minus yielded data_points. Need to clear data_points and keep metric
+                            # to avoid duplicate data_point export
                             batch_size = 0
-                            split_data_points = []
 
                             new_metric = None 
                             if metric.HasField("sum"):
@@ -476,45 +470,53 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                             else:
                                 _logger.warning("Tried to split and export an unsupported metric type.")
 
-                            if new_metric is not None:
-                                split_metrics = [new_metric]
-                            else:
-                                split_metrics = []
-
                             new_scope_metrics = pb2.ScopeMetrics(
                                 scope=scope_metrics.scope,
-                                metrics=split_metrics,
+                                metrics=[new_metric],
                                 schema_url=scope_metrics.schema_url,
                             )
-                            split_scope_metrics = [new_scope_metrics]
-
                             new_resource_metrics = pb2.ResourceMetrics(
                                 resource=resource_metrics.resource,
-                                scope_metrics=split_scope_metrics,
+                                scope_metrics=[new_scope_metrics],
                                 schema_url=resource_metrics.schema_url,
                             )
-                            split_resource_metrics = [new_resource_metrics]
 
-                    if not split_data_points:
-                        # If data_points is empty remove the whole metric
-                        split_metrics.pop()
-                    else:
-                        # Update scope metrics after all data_points added to metric
+                    has_data_points = False
+                    if new_metric.HasField("sum"):
+                        if new_metric.sum.data_points:
+                            has_data_points = True
+                    elif new_metric.HasField("histogram"):
+                        if new_metric.histogram.data_points:
+                            has_data_points = True 
+                    elif new_metric.HasField("exponential_histogram"):
+                        if new_metric.exponential_histogram.data_points:
+                            has_data_points = True 
+                    elif new_metric.HasField("gauge"):
+                        if new_metric.gauge.data_points:
+                            has_data_points = True 
+                    elif new_metric.HasField("summary"):
+                        if new_metric.summary.data_points:
+                            has_data_points = True
+
+                    # If already added as part of previous batch
+                    # but data_points empty, remove from scope and resource
+                    if added_to_scope and not has_data_points:
+                        del new_scope_metrics.metrics[-1]
+                    if added_to_resource and not has_data_points:
+                        del new_resource_metrics.scope_metrics[-1]
+
+                    # If not added to scope and has data_points, add
+                    if not added_to_scope and has_data_points:
                         new_scope_metrics.metrics.append(new_metric)
 
-                if not split_metrics:
-                    # If metrics is empty remove the whole scope_metrics
-                    split_scope_metrics.pop()
-                else:
-                    # Update resource_metrics after all scope_metrics updated with metrics, data_points
+                if new_scope_metrics.metrics:
                     new_resource_metrics.scope_metrics.append(new_scope_metrics)
 
-            if not split_scope_metrics:
-                # If scope_metrics is empty remove the whole resource_metrics
-                split_resource_metrics.pop()
+            # TODO: Account for multiple ResourceMetrics in original MetricsData
 
         if batch_size > 0:
-            yield pb2.MetricsData(resource_metrics=split_resource_metrics)
+            # TODO: Account for multiple ResourceMetrics in original MetricsData
+            yield pb2.MetricsData(resource_metrics=[new_resource_metrics])
 
     def shutdown(self, timeout_millis: float = 30_000, **kwargs) -> None:
         pass
