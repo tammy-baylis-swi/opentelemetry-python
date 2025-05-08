@@ -294,6 +294,101 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
     
         return MetricExportResult.FAILURE
 
+    def _get_split_resource_metrics_pb2(
+        self,
+        split_resource_metrics: List[Any],
+    ) -> List[pb2.ResourceMetrics]:
+        """Returns list of embedded pb2 objects based on provided split_resource_metrics reference"""
+        split_resource_metrics_pb = []
+        for resource_metrics_dict in split_resource_metrics:
+            new_resource_metrics = pb2.ResourceMetrics(
+                    resource=resource_metrics_dict.get("resource"),
+                    scope_metrics=[],
+                    schema_url=resource_metrics_dict.get("schema_url"),
+                )
+            for scope_metrics_dict in resource_metrics_dict.get("scope_metrics", []):
+                new_scope_metrics = pb2.ScopeMetrics(
+                        scope=scope_metrics_dict.get("scope"),
+                        metrics=[],
+                        schema_url=scope_metrics_dict.get("schema_url"),
+                    )
+
+                for metric_dict in scope_metrics_dict.get("metrics", []):
+                    new_metric = None
+                    data_points_dicts = []
+
+                    if "sum" in metric_dict:
+                        new_metric = pb2.Metric(
+                            name=metric_dict.get("name"),
+                            description=metric_dict.get("description"),
+                            unit=metric_dict.get("unit"),
+                            sum=pb2.Sum(
+                                data_points=[],
+                                aggregation_temporality=metric_dict.get("sum").get("aggregation_temporality"),
+                                is_monotonic=metric_dict.get("sum").get("is_monotonic"),
+                            )
+                        )
+                        data_points_dicts = metric_dict.get("sum").get("data_points")
+                    elif "histogram" in metric_dict:
+                        new_metric = pb2.Metric(
+                            name=metric_dict.get("name"),
+                            description=metric_dict.get("description"),
+                            unit=metric_dict.get("unit"),
+                            histogram=pb2.Histogram(
+                                data_points=[],
+                                aggregation_temporality=metric_dict.get("histogram").get("aggregation_temporality"),
+                            ),
+                        )
+                        data_points_dicts = metric_dict.get("histogram").get("data_points")
+                    elif "exponential_histogram" in metric_dict:
+                        new_metric = pb2.Metric(
+                            name=metric_dict.get("name"),
+                            description=metric_dict.get("description"),
+                            unit=metric_dict.get("unit"),
+                            exponential_histogram=pb2.ExponentialHistogram(
+                                data_points=[],
+                                aggregation_temporality=metric_dict.get("exponential_histogram").get("aggregation_temporality"),
+                            ),
+                        )
+                        data_points_dicts = metric_dict.get("exponential_histogram").get("data_points")
+                    elif "gauge" in metric_dict:
+                        new_metric = pb2.Metric(
+                            name=metric_dict.get("name"),
+                            description=metric_dict.get("description"),
+                            unit=metric_dict.get("unit"),
+                            gauge=pb2.Gauge(
+                                data_points=[],
+                            )
+                        )
+                        data_points_dicts = metric_dict.get("gauge").get("data_points")
+                    elif "summary" in metric_dict:
+                        new_metric = pb2.Metric(
+                            name=metric_dict.get("name"),
+                            description=metric_dict.get("description"),
+                            unit=metric_dict.get("unit"),
+                            summary=pb2.Summary(
+                                data_points=[],
+                            )
+                        )
+                        data_points_dicts = metric_dict.get("summary").get("data_points")
+
+                    for data_point_dict in data_points_dicts:
+                        if "sum" in metric_dict:
+                            new_metric.sum.data_points.append(data_point_dict)
+                        elif "histogram" in metric_dict:
+                            new_metric.histogram.data_points.append(data_point_dict)
+                        elif "exponential_histogram" in metric_dict:
+                            new_metric.exponential_histogram.data_points.append(data_point_dict)
+                        elif "gauge" in metric_dict:
+                            new_metric.gauge.data_points.append(data_point_dict)
+                        elif "summary" in metric_dict:
+                            new_metric.summary.data_points.append(data_point_dict)
+                    
+                    new_scope_metrics.metrics.append(new_metric)
+                new_resource_metrics.scope_metrics.append(new_scope_metrics)
+            split_resource_metrics_pb.append(new_resource_metrics)        
+        return split_resource_metrics_pb
+
     def _split_metrics_data(
         self,
         metrics_data: pb2.MetricsData,
@@ -305,218 +400,206 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
             metrics_data: metrics object based on HTTP protocol buffer definition
         """
         batch_size: int = 0
-        split_resource_metrics: List[pb2.ResourceMetrics] = []
+        # Store split metrics data as editable references
+        # used to write batched pb2 objects for export
+        split_resource_metrics = []
 
         for resource_metrics in metrics_data.resource_metrics:
-            new_resource_metrics = pb2.ResourceMetrics(
-                    resource=resource_metrics.resource,
-                    scope_metrics=[],
-                    schema_url=resource_metrics.schema_url,
-                )
+            split_scope_metrics = []
+            split_resource_metrics.append(
+                {
+                    "resource": resource_metrics.resource,
+                    "schema_url": resource_metrics.schema_url,
+                    "scope_metrics": split_scope_metrics,
+                }
+            )
 
             for scope_metrics in resource_metrics.scope_metrics:
-                new_scope_metrics = pb2.ScopeMetrics(
-                        scope=scope_metrics.scope,
-                        metrics=[],
-                        schema_url=scope_metrics.schema_url,
-                    )
-                added_to_resource = False
+                split_metrics = []
+                split_scope_metrics.append(
+                    {
+                        "scope": scope_metrics.scope,
+                        "schema_url": scope_metrics.schema_url,
+                        "metrics": split_metrics,
+                    }
+                )
 
                 for metric in scope_metrics.metrics:
-                    # protobuf specifies metrics types (e.g. Sum, Histogram)
-                    # without definition of DataPointT like gRPC
-                    current_data_points = []
-                    new_metric = None
-                    added_to_scope = False
+                    split_data_points = []
 
+                    # protobuf specifies metrics types (e.g. Sum, Histogram)
+                    # with different accessors for data points, etc
+                    current_data_points = []
                     if metric.HasField("sum"):
+                        split_metrics.append(
+                            {
+                                "name": metric.name,
+                                "description": metric.description,
+                                "unit": metric.unit,
+                                "sum": {
+                                    "aggregation_temporality": metric.sum.aggregation_temporality,
+                                    "is_monotonic": metric.sum.is_monotonic,
+                                    "data_points": split_data_points,
+                                }
+                            }
+                        )
                         current_data_points = metric.sum.data_points
-                        new_metric = pb2.Metric(
-                            name=metric.name,
-                            description=metric.description,
-                            unit=metric.unit,
-                            sum=pb2.Sum(
-                                data_points=[],
-                                aggregation_temporality=metric.sum.aggregation_temporality,
-                                is_monotonic=metric.sum.is_monotonic
-                            )
-                        )
                     elif metric.HasField("histogram"):
+                        split_metrics.append(
+                            {
+                                "name": metric.name,
+                                "description": metric.description,
+                                "unit": metric.unit,
+                                "histogram": {
+                                    "aggregation_temporality": metric.histogram.aggregation_temporality,
+                                    "data_points": split_data_points,
+                                }
+                            }
+                        )
                         current_data_points = metric.histogram.data_points
-                        new_metric = pb2.Metric(
-                            name=metric.name,
-                            description=metric.description,
-                            unit=metric.unit,
-                            histogram=pb2.Histogram(
-                                data_points=[],
-                                aggregation_temporality=metric.histogram.aggregation_temporality,
-                            ),
-                        )
                     elif metric.HasField("exponential_histogram"):
+                        split_metrics.append(
+                            {
+                                "name": metric.name,
+                                "description": metric.description,
+                                "unit": metric.unit,
+                                "exponential_histogram": {
+                                    "aggregation_temporality": metric.exponential_histogram.aggregation_temporality,
+                                    "data_points": split_data_points,
+                                }
+                            }
+                        )
                         current_data_points = metric.exponential_histogram.data_points
-                        new_metric = pb2.Metric(
-                            name=metric.name,
-                            description=metric.description,
-                            unit=metric.unit,
-                            exponential_histogram=pb2.ExponentialHistogram(
-                                data_points=[],
-                                aggregation_temporality=metric.exponential_histogram.aggregation_temporality,
-                            ),
-                        )
                     elif metric.HasField("gauge"):
-                        current_data_points = metric.gauge.data_points
-                        new_metric = pb2.Metric(
-                            name=metric.name,
-                            description=metric.description,
-                            unit=metric.unit,
-                            gauge=pb2.Gauge(
-                                data_points=[],
-                            )
+                        split_metrics.append(
+                            {
+                                "name": metric.name,
+                                "description": metric.description,
+                                "unit": metric.unit,
+                                "gauge": {
+                                    "data_points": split_data_points,
+                                }
+                            }
                         )
+                        current_data_points = metric.gauge.data_points
                     elif metric.HasField("summary"):
-                        current_data_points = metric.summary.data_points
-                        new_metric = pb2.Metric(
-                            name=metric.name,
-                            description=metric.description,
-                            unit=metric.unit,
-                            summary=pb2.Summary(
-                                data_points=[],
-                            )
+                        split_metrics.append(
+                            {
+                                "name": metric.name,
+                                "description": metric.description,
+                                "unit": metric.unit,
+                                "summary": {
+                                    "data_points": split_data_points,
+                                }
+                            }
                         )
                     else:
-                        _logger.warning("Tried to split and export an unsupported metric type.")
+                        _logger.warning("Tried to split and export an unsupported metric type. Skipping.")
+                        continue
 
                     for data_point in current_data_points:
-                        if metric.HasField("sum"):
-                            new_metric.sum.data_points.append(data_point)
-                        elif metric.HasField("histogram"):
-                            new_metric.histogram.data_points.append(data_point)
-                        elif metric.HasField("exponential_histogram"):
-                            new_metric.exponential_histogram.data_points.append(data_point)
-                        elif metric.HasField("gauge"):
-                            new_metric.gauge.data_points.append(data_point)
-                        elif metric.HasField("summary"):
-                            new_metric.summary.data_points.append(data_point)
-
+                        split_data_points.append(data_point)
                         batch_size += 1
 
                         if batch_size >= self._max_export_batch_size:
-                            # Update scope metrics, resource metrics after all data_points (so far) added to metric
-                            # and yield this batch
-                            new_scope_metrics.metrics.append(new_metric)
-                            added_to_scope = True
-                            new_resource_metrics.scope_metrics.append(new_scope_metrics)
-                            added_to_resource = True
-
                             yield pb2.MetricsData(
-                                resource_metrics=[new_resource_metrics]
+                                resource_metrics=self._get_split_resource_metrics_pb2(split_resource_metrics)
                             )
 
-                            # Reset all the variables with current metrics_data position
+                            # Reset all the reference variables with current metrics_data position
                             # minus yielded data_points. Need to clear data_points and keep metric
                             # to avoid duplicate data_point export
                             batch_size = 0
+                            split_data_points = []
 
-                            new_metric = None 
                             if metric.HasField("sum"):
-                                new_metric = pb2.Metric(
-                                    name=metric.name,
-                                    description=metric.description,
-                                    unit=metric.unit,
-                                    sum=pb2.Sum(
-                                        data_points=[],
-                                        aggregation_temporality=metric.sum.aggregation_temporality,
-                                        is_monotonic=metric.sum.is_monotonic
-                                    )
-                                )
+                                split_metrics = [
+                                    {
+                                        "name": metric.name,
+                                        "description": metric.description,
+                                        "unit": metric.unit,
+                                        "sum": {
+                                            "aggregation_temporality": metric.sum.aggregation_temporality,
+                                            "is_monotonic": metric.sum.is_monotonic,
+                                            "data_points": split_data_points,
+                                        }
+                                    }
+                                ]
                             elif metric.HasField("histogram"):
-                                new_metric = pb2.Metric(
-                                    name=metric.name,
-                                    description=metric.description,
-                                    unit=metric.unit,
-                                    histogram=pb2.Histogram(
-                                        data_points=[],
-                                        aggregation_temporality=metric.histogram.aggregation_temporality,
-                                    ),
-                                )
+                                split_metrics = [
+                                    {
+                                        "name": metric.name,
+                                        "description": metric.description,
+                                        "unit": metric.unit,
+                                        "histogram": {
+                                            "aggregation_temporality": metric.histogram.aggregation_temporality,
+                                            "data_points": split_data_points,
+                                        }
+                                    }
+                                ]
                             elif metric.HasField("exponential_histogram"):
-                                new_metric = pb2.Metric(
-                                    name=metric.name,
-                                    description=metric.description,
-                                    unit=metric.unit,
-                                    exponential_histogram=pb2.ExponentialHistogram(
-                                        data_points=[],
-                                        aggregation_temporality=metric.exponential_histogram.aggregation_temporality,
-                                    ),
-                                )
+                                split_metrics = [
+                                    {
+                                        "name": metric.name,
+                                        "description": metric.description,
+                                        "unit": metric.unit,
+                                        "exponential_histogram": {
+                                            "aggregation_temporality": metric.exponential_histogram.aggregation_temporality,
+                                            "data_points": split_data_points,
+                                        }
+                                    }
+                                ]
                             elif metric.HasField("gauge"):
-                                new_metric = pb2.Metric(
-                                    name=metric.name,
-                                    description=metric.description,
-                                    unit=metric.unit,
-                                    gauge=pb2.Gauge(
-                                        data_points=[],
-                                    )
-                                )
+                                split_metrics = [
+                                    {
+                                        "name": metric.name,
+                                        "description": metric.description,
+                                        "unit": metric.unit,
+                                        "gauge": {
+                                            "data_points": split_data_points,
+                                        }
+                                    }
+                                ]
                             elif metric.HasField("summary"):
-                                new_metric = pb2.Metric(
-                                    name=metric.name,
-                                    description=metric.description,
-                                    unit=metric.unit,
-                                    summary=pb2.Summary(
-                                        data_points=[],
-                                    )
-                                )
-                            else:
-                                _logger.warning("Tried to split and export an unsupported metric type.")
+                                split_metrics = [
+                                    {
+                                        "name": metric.name,
+                                        "description": metric.description,
+                                        "unit": metric.unit,
+                                        "summary": {
+                                            "data_points": split_data_points,
+                                        }
+                                    }
+                                ]
 
-                            new_scope_metrics = pb2.ScopeMetrics(
-                                scope=scope_metrics.scope,
-                                metrics=[new_metric],
-                                schema_url=scope_metrics.schema_url,
-                            )
-                            new_resource_metrics = pb2.ResourceMetrics(
-                                resource=resource_metrics.resource,
-                                scope_metrics=[new_scope_metrics],
-                                schema_url=resource_metrics.schema_url,
-                            )
+                            split_scope_metrics = [
+                                {
+                                    "scope": scope_metrics.scope,
+                                    "schema_url": scope_metrics.schema_url,
+                                    "metrics": split_metrics,
+                                }
+                            ]
+                            split_resource_metrics = [
+                                {
+                                    "resource": resource_metrics.resource,
+                                    "schema_url": resource_metrics.schema_url,
+                                    "scope_metrics": split_scope_metrics,
+                                }
+                            ]
 
-                    has_data_points = False
-                    if new_metric.HasField("sum"):
-                        if new_metric.sum.data_points:
-                            has_data_points = True
-                    elif new_metric.HasField("histogram"):
-                        if new_metric.histogram.data_points:
-                            has_data_points = True 
-                    elif new_metric.HasField("exponential_histogram"):
-                        if new_metric.exponential_histogram.data_points:
-                            has_data_points = True 
-                    elif new_metric.HasField("gauge"):
-                        if new_metric.gauge.data_points:
-                            has_data_points = True 
-                    elif new_metric.HasField("summary"):
-                        if new_metric.summary.data_points:
-                            has_data_points = True
+                    if not split_data_points:
+                        split_metrics.pop()
 
-                    # If already added as part of previous batch
-                    # but data_points empty, remove from scope and resource
-                    if added_to_scope and not has_data_points:
-                        del new_scope_metrics.metrics[-1]
-                    if added_to_resource and not has_data_points:
-                        del new_resource_metrics.scope_metrics[-1]
+                if not split_metrics:
+                    split_scope_metrics.pop()
 
-                    # If not added to scope and has data_points, add
-                    if not added_to_scope and has_data_points:
-                        new_scope_metrics.metrics.append(new_metric)
-
-                if new_scope_metrics.metrics:
-                    new_resource_metrics.scope_metrics.append(new_scope_metrics)
-
-            if new_resource_metrics.scope_metrics:
-                split_resource_metrics.append(new_resource_metrics)
+            if not split_scope_metrics:
+                split_resource_metrics.pop()
 
         if batch_size > 0:
-            yield pb2.MetricsData(resource_metrics=split_resource_metrics)
+            yield pb2.MetricsData(
+                resource_metrics=self._get_split_resource_metrics_pb2(split_resource_metrics)
+            )
 
     def shutdown(self, timeout_millis: float = 30_000, **kwargs) -> None:
         pass
