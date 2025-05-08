@@ -294,101 +294,6 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
     
         return MetricExportResult.FAILURE
 
-    def _get_split_resource_metrics_pb2(
-        self,
-        split_resource_metrics: List[Any],
-    ) -> List[pb2.ResourceMetrics]:
-        """Returns list of embedded pb2 objects based on provided split_resource_metrics reference"""
-        split_resource_metrics_pb = []
-        for resource_metrics_dict in split_resource_metrics:
-            new_resource_metrics = pb2.ResourceMetrics(
-                    resource=resource_metrics_dict.get("resource"),
-                    scope_metrics=[],
-                    schema_url=resource_metrics_dict.get("schema_url"),
-                )
-            for scope_metrics_dict in resource_metrics_dict.get("scope_metrics", []):
-                new_scope_metrics = pb2.ScopeMetrics(
-                        scope=scope_metrics_dict.get("scope"),
-                        metrics=[],
-                        schema_url=scope_metrics_dict.get("schema_url"),
-                    )
-
-                for metric_dict in scope_metrics_dict.get("metrics", []):
-                    new_metric = None
-                    data_points_dicts = []
-
-                    if "sum" in metric_dict:
-                        new_metric = pb2.Metric(
-                            name=metric_dict.get("name"),
-                            description=metric_dict.get("description"),
-                            unit=metric_dict.get("unit"),
-                            sum=pb2.Sum(
-                                data_points=[],
-                                aggregation_temporality=metric_dict.get("sum").get("aggregation_temporality"),
-                                is_monotonic=metric_dict.get("sum").get("is_monotonic"),
-                            )
-                        )
-                        data_points_dicts = metric_dict.get("sum").get("data_points")
-                    elif "histogram" in metric_dict:
-                        new_metric = pb2.Metric(
-                            name=metric_dict.get("name"),
-                            description=metric_dict.get("description"),
-                            unit=metric_dict.get("unit"),
-                            histogram=pb2.Histogram(
-                                data_points=[],
-                                aggregation_temporality=metric_dict.get("histogram").get("aggregation_temporality"),
-                            ),
-                        )
-                        data_points_dicts = metric_dict.get("histogram").get("data_points")
-                    elif "exponential_histogram" in metric_dict:
-                        new_metric = pb2.Metric(
-                            name=metric_dict.get("name"),
-                            description=metric_dict.get("description"),
-                            unit=metric_dict.get("unit"),
-                            exponential_histogram=pb2.ExponentialHistogram(
-                                data_points=[],
-                                aggregation_temporality=metric_dict.get("exponential_histogram").get("aggregation_temporality"),
-                            ),
-                        )
-                        data_points_dicts = metric_dict.get("exponential_histogram").get("data_points")
-                    elif "gauge" in metric_dict:
-                        new_metric = pb2.Metric(
-                            name=metric_dict.get("name"),
-                            description=metric_dict.get("description"),
-                            unit=metric_dict.get("unit"),
-                            gauge=pb2.Gauge(
-                                data_points=[],
-                            )
-                        )
-                        data_points_dicts = metric_dict.get("gauge").get("data_points")
-                    elif "summary" in metric_dict:
-                        new_metric = pb2.Metric(
-                            name=metric_dict.get("name"),
-                            description=metric_dict.get("description"),
-                            unit=metric_dict.get("unit"),
-                            summary=pb2.Summary(
-                                data_points=[],
-                            )
-                        )
-                        data_points_dicts = metric_dict.get("summary").get("data_points")
-
-                    for data_point_dict in data_points_dicts:
-                        if "sum" in metric_dict:
-                            new_metric.sum.data_points.append(data_point_dict)
-                        elif "histogram" in metric_dict:
-                            new_metric.histogram.data_points.append(data_point_dict)
-                        elif "exponential_histogram" in metric_dict:
-                            new_metric.exponential_histogram.data_points.append(data_point_dict)
-                        elif "gauge" in metric_dict:
-                            new_metric.gauge.data_points.append(data_point_dict)
-                        elif "summary" in metric_dict:
-                            new_metric.summary.data_points.append(data_point_dict)
-                    
-                    new_scope_metrics.metrics.append(new_metric)
-                new_resource_metrics.scope_metrics.append(new_scope_metrics)
-            split_resource_metrics_pb.append(new_resource_metrics)        
-        return split_resource_metrics_pb
-
     def _split_metrics_data(
         self,
         metrics_data: pb2.MetricsData,
@@ -398,10 +303,14 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
 
         Args:
             metrics_data: metrics object based on HTTP protocol buffer definition
+
+        Returns:
+            Iterable[pb2.MetricsData]: An iterable of pb2.MetricsData objects containing
+                pb2.ResourceMetrics, pb2.ScopeMetrics, pb2.Metrics, and data points
         """
         batch_size: int = 0
-        # Store split metrics data as editable references
-        # used to write batched pb2 objects for export
+        # Stores split metrics data as editable references
+        # used to write batched pb2 objects for export when finalized
         split_resource_metrics = []
 
         for resource_metrics in metrics_data.resource_metrics:
@@ -429,6 +338,7 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
 
                     # protobuf specifies metrics types (e.g. Sum, Histogram)
                     # with different accessors for data points, etc
+                    # We maintain these structures throughout batch calculation
                     current_data_points = []
                     if metric.HasField("sum"):
                         split_metrics.append(
@@ -588,18 +498,162 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                             ]
 
                     if not split_data_points:
+                        # If data_points is empty remove the whole metric
                         split_metrics.pop()
 
                 if not split_metrics:
+                    # If metrics is empty remove the whole scope_metrics
                     split_scope_metrics.pop()
 
             if not split_scope_metrics:
+                # If scope_metrics is empty remove the whole resource_metrics
                 split_resource_metrics.pop()
 
         if batch_size > 0:
             yield pb2.MetricsData(
                 resource_metrics=self._get_split_resource_metrics_pb2(split_resource_metrics)
             )
+
+    def _get_split_resource_metrics_pb2(
+        self,
+        split_resource_metrics: List[Dict],
+    ) -> List[pb2.ResourceMetrics]:
+        """Helper that returns a list of pb2.ResourceMetrics objects based on split_resource_metrics.
+        Example input:
+
+        ```python
+        [
+            {
+                "resource": <opentelemetry.proto.resource.v1.Resource>,
+                "schema_url": "http://foo-bar",
+                "scope_metrics": [
+                    "scope": <opentelemetry.proto.common.v1.InstrumentationScope>,
+                    "schema_url": "http://foo-baz",
+                    "metrics": [
+                        {
+                            "name": "apples",
+                            "description": "number of apples purchased",
+                            "sum": {
+                                "aggregation_temporality": 1,
+                                "is_monotonic": "false",
+                                "data_points": [
+                                    {
+                                        start_time_unix_nano: 1000
+                                        time_unix_nano: 1001
+                                        exemplars {
+                                            time_unix_nano: 1002
+                                            span_id: "foo-span"
+                                            trace_id: "foo-trace"
+                                            as_int: 5
+                                        }
+                                        as_int: 5
+                                    }
+                                ]
+                            }
+                        },
+                    ],
+                ],
+            },
+        ]
+        ```
+
+        Args:
+            split_resource_metrics: A list of dict representations of ResourceMetrics,
+                ScopeMetrics, Metrics, and data points.
+
+        Returns:
+            List[pb2.ResourceMetrics]: A list of pb2.ResourceMetrics objects containing
+                pb2.ScopeMetrics, pb2.Metrics, and data points
+        """
+        split_resource_metrics_pb = []
+        for resource_metrics in split_resource_metrics:
+            new_resource_metrics = pb2.ResourceMetrics(
+                    resource=resource_metrics.get("resource"),
+                    scope_metrics=[],
+                    schema_url=resource_metrics.get("schema_url"),
+                )
+            for scope_metrics in resource_metrics.get("scope_metrics", []):
+                new_scope_metrics = pb2.ScopeMetrics(
+                        scope=scope_metrics.get("scope"),
+                        metrics=[],
+                        schema_url=scope_metrics.get("schema_url"),
+                    )
+
+                for metric in scope_metrics.get("metrics", []):
+                    new_metric = None
+                    data_points = []
+
+                    if "sum" in metric:
+                        new_metric = pb2.Metric(
+                            name=metric.get("name"),
+                            description=metric.get("description"),
+                            unit=metric.get("unit"),
+                            sum=pb2.Sum(
+                                data_points=[],
+                                aggregation_temporality=metric.get("sum").get("aggregation_temporality"),
+                                is_monotonic=metric.get("sum").get("is_monotonic"),
+                            )
+                        )
+                        data_points = metric.get("sum").get("data_points")
+                    elif "histogram" in metric:
+                        new_metric = pb2.Metric(
+                            name=metric.get("name"),
+                            description=metric.get("description"),
+                            unit=metric.get("unit"),
+                            histogram=pb2.Histogram(
+                                data_points=[],
+                                aggregation_temporality=metric.get("histogram").get("aggregation_temporality"),
+                            ),
+                        )
+                        data_points = metric.get("histogram").get("data_points")
+                    elif "exponential_histogram" in metric:
+                        new_metric = pb2.Metric(
+                            name=metric.get("name"),
+                            description=metric.get("description"),
+                            unit=metric.get("unit"),
+                            exponential_histogram=pb2.ExponentialHistogram(
+                                data_points=[],
+                                aggregation_temporality=metric.get("exponential_histogram").get("aggregation_temporality"),
+                            ),
+                        )
+                        data_points = metric.get("exponential_histogram").get("data_points")
+                    elif "gauge" in metric:
+                        new_metric = pb2.Metric(
+                            name=metric.get("name"),
+                            description=metric.get("description"),
+                            unit=metric.get("unit"),
+                            gauge=pb2.Gauge(
+                                data_points=[],
+                            )
+                        )
+                        data_points = metric.get("gauge").get("data_points")
+                    elif "summary" in metric:
+                        new_metric = pb2.Metric(
+                            name=metric.get("name"),
+                            description=metric.get("description"),
+                            unit=metric.get("unit"),
+                            summary=pb2.Summary(
+                                data_points=[],
+                            )
+                        )
+                        data_points = metric.get("summary").get("data_points")
+
+                    for data_point in data_points:
+                        if "sum" in metric:
+                            new_metric.sum.data_points.append(data_point)
+                        elif "histogram" in metric:
+                            new_metric.histogram.data_points.append(data_point)
+                        elif "exponential_histogram" in metric:
+                            new_metric.exponential_histogram.data_points.append(data_point)
+                        elif "gauge" in metric:
+                            new_metric.gauge.data_points.append(data_point)
+                        elif "summary" in metric:
+                            new_metric.summary.data_points.append(data_point)
+                    
+                    new_scope_metrics.metrics.append(new_metric)
+                new_resource_metrics.scope_metrics.append(new_scope_metrics)
+            split_resource_metrics_pb.append(new_resource_metrics)        
+        return split_resource_metrics_pb
 
     def shutdown(self, timeout_millis: float = 30_000, **kwargs) -> None:
         pass
