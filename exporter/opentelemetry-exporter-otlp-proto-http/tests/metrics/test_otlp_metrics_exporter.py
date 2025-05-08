@@ -369,7 +369,7 @@ class TestOTLPMetricExporter(TestCase):
 
         self.assertEqual(
             [
-                MetricsData(
+                pb2.MetricsData(
                     resource_metrics=[
                         _resource_metrics(
                             index=1,
@@ -390,7 +390,7 @@ class TestOTLPMetricExporter(TestCase):
                         ),
                     ]
                 ),
-                MetricsData(
+                pb2.MetricsData(
                     resource_metrics=[
                         _resource_metrics(
                             index=1,
@@ -415,7 +415,7 @@ class TestOTLPMetricExporter(TestCase):
         )
 
     def test_split_metrics_data_nb_data_points_equal_batch_size(self):
-        metrics_data = MetricsData(
+        metrics_data = pb2.MetricsData(
             resource_metrics=[
                 _resource_metrics(
                     index=1,
@@ -447,7 +447,7 @@ class TestOTLPMetricExporter(TestCase):
 
         self.assertEqual(
             [
-                MetricsData(
+                pb2.MetricsData(
                     resource_metrics=[
                         _resource_metrics(
                             index=1,
@@ -475,7 +475,7 @@ class TestOTLPMetricExporter(TestCase):
 
     def test_split_metrics_data_many_resources_scopes_metrics(self):
         # GIVEN
-        metrics_data = MetricsData(
+        metrics_data = pb2.MetricsData(
             resource_metrics=[
                 _resource_metrics(
                     index=1,
@@ -538,7 +538,7 @@ class TestOTLPMetricExporter(TestCase):
 
         self.assertEqual(
             [
-                MetricsData(
+                pb2.MetricsData(
                     resource_metrics=[
                         _resource_metrics(
                             index=1,
@@ -564,7 +564,7 @@ class TestOTLPMetricExporter(TestCase):
                         ),
                     ]
                 ),
-                MetricsData(
+                pb2.MetricsData(
                     resource_metrics=[
                         _resource_metrics(
                             index=1,
