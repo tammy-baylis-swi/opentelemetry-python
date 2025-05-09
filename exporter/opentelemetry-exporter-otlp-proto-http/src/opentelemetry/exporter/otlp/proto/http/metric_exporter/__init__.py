@@ -524,7 +524,7 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
         ```python
         [
             {
-                "resource": <opentelemetry.proto.resource.v1.Resource>,
+                "resource": <opentelemetry.proto.resource.v1.resource_pb2.Resource>,
                 "schema_url": "http://foo-bar",
                 "scope_metrics": [
                     "scope": <opentelemetry.proto.common.v1.InstrumentationScope>,
@@ -637,6 +637,9 @@ class OTLPMetricExporter(MetricExporter, OTLPMetricExporterMixin):
                             )
                         )
                         data_points = metric.get("summary").get("data_points")
+                    else:
+                        _logger.warning("Tried to split and export an unsupported metric type. Skipping.")
+                        continue
 
                     for data_point in data_points:
                         if "sum" in metric:
